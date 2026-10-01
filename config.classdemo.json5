@@ -1,0 +1,98 @@
+// =====================================================================
+//  ChatOps class demo — hardening config for the isolated "classdemo"
+//  OpenClaw profile. Applied with:
+//     openclaw --profile classdemo config patch --file config.classdemo.json5
+//
+//  Every block below maps to one of the six fences from the brief.
+//  Keys verified against the INSTALLED schema (`openclaw config schema`),
+//  not the public docs — the installed version (2026.5.28) differs.
+//  Read top-to-bottom: this file is also the teaching artifact.
+// =====================================================================
+{
+  agents: {
+    defaults: {
+      // ---- Fence 5: a time limit per task, and one task at a time ----
+      timeoutSeconds: 300,          // wall-clock ceiling for one agent turn
+      maxConcurrent: 1,             // only ONE top-level turn runs; the rest queue
+      subagents: {
+        maxConcurrent: 1,           // no parallel fan-out either
+        runTimeoutSeconds: 300,
+      },
+
+      // ---- Fence 2 (one work folder) + Fence 3 (no credential access)
+      //      + requirement #7 (isolated container, no egress) ----
+      sandbox: {
+        mode: "all",                // sandbox every session's tool execution
+        backend: "docker",          // this OpenClaw version only registers the "docker"
+                                    // backend; we run rootless Podman under it via a
+                                    // docker->podman shim (setup.sh creates it). Uses `docker` block.
+        scope: "agent",             // one container per agent
+        workspaceAccess: "rw",      // the ONE folder the agent may touch = its own
+                                    // workspace, mounted read/write at /workspace.
+                                    // The host home is never exposed; symlink/.. escapes
+                                    // die at the container filesystem boundary.
+        docker: {
+          network: "none",          // #7: ZERO outbound network from inside the sandbox
+          readOnlyRoot: true,       // nothing writable except the workspace + tmpfs
+          capDrop: ["ALL"],         // drop every Linux capability
+          user: "0:0",              // rootless Podman: container-root maps to the
+                                    // unprivileged host user, so tools can write the
+                                    // bind-mounted /workspace (and are still unprivileged
+                                    // on the host). Needed because host uid != container uid.
+          // binds: intentionally EMPTY — no host folder is mounted in.
+          // Home credential roots (~/.ssh, ~/.aws, ~/.config, ~/.gnupg, ...)
+          // are blocked by default; do NOT set dangerouslyAllowExternalBindSources.
+        },
+      },
+    },
+  },
+
+  // ---- Fence 4 (approve every shell) + Fence 6 (refuse destructive/exfil) ----
+  // IMPORTANT: exec *approvals* (~/.openclaw/exec-approvals.json) are node-global
+  // and shared with your real gateway — `--profile` does NOT isolate them. So we
+  // do NOT call `exec-policy set` (that would change your real gateway). Instead
+  // we set the *requested* policy here, in the profile config. Effective policy
+  // is "requested ∩ host approvals, most-restrictive wins", so this alone locks
+  // classdemo to allowlist+always while your real gateway stays full/off.
+  tools: {
+    deny: ["gateway", "cron", "sessions_spawn", "sessions_send"],
+    elevated: { enabled: false },   // no "host escape" for exec, ever
+    exec: {
+      host: "sandbox",              // approved commands run INSIDE the container
+      security: "allowlist",        // only allowlisted commands run; rest denied
+      ask: "always",                // Fence 4: prompt the operator on EVERY exec
+      timeoutSec: 120,              // per-command ceiling
+    },
+    // Defense in depth: lock the sandbox tool surface too (mode:"all" routes
+    // everything through it), not just the gateway-side tool policy above.
+    sandbox: { tools: { deny: ["gateway", "cron", "sessions_spawn", "sessions_send", "browser", "nodes"] } },
+  },
+
+  // ---- Fence 1: only registered senders are served ----
+  channels: {
+    telegram: {
+      dmPolicy: "allowlist",        // unknown senders are blocked outright:
+                                    // no pairing handshake, no reply, no info leak.
+      // allowFrom and botToken (a SecretRef) are set by setup.sh, because they
+      // are per-operator and must not live in a committed file.
+    },
+  },
+
+  // ---- Requirement #7, "except what I allow": Gateway egress ----
+  // The sandbox already has network:"none" (agent cannot reach the network at
+  // all). The GATEWAY itself still needs to reach the model API + Telegram.
+  // This installed version has no native per-host egress allowlist
+  // (`secrets.egressProxy` is absent), but it CAN route Gateway egress through
+  // an operator-run filtering proxy. Off by default; see WHATSAPP.md/README for
+  // how to turn it on with a Squid allowlist if you want that extra fence.
+  proxy: {
+    enabled: false,
+  },
+
+  // ---- Local, loopback-only gateway on a port that won't clash with your
+  //      real gateway (18789). mode:"local" is required to start. ----
+  gateway: {
+    mode: "local",
+    port: 18790,
+  },
+}

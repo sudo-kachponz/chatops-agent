@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatOps demo — projector (offline backup)</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#161c2b; --line:#273349; --ink:#e7edf7; --mut:#8aa0c0;
+    --op:#2b6cff; --agent:#243049; --ok:#1f9d55; --deny:#e04b4b; --warn:#d7a21a;
+    --mono:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;
+    border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header .tag{font-size:12px;color:var(--mut);border:1px solid var(--line);
+    padding:2px 8px;border-radius:999px}
+  header .spacer{flex:1}
+  button{font:inherit;color:var(--ink);background:var(--op);border:0;
+    padding:9px 18px;border-radius:9px;cursor:pointer;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--line)}
+  button:disabled{opacity:.5;cursor:default}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:0;height:calc(100vh - 59px)}
+  .col{overflow:auto;padding:22px}
+  .col.chat{border-right:1px solid var(--line)}
+  .col h2{position:sticky;top:-22px;margin:-22px -22px 14px;padding:12px 22px;
+    background:var(--panel);border-bottom:1px solid var(--line);font-size:13px;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+  .msg{margin:12px 0;max-width:86%;padding:11px 14px;border-radius:13px;
+    opacity:0;transform:translateY(8px);transition:.35s}
+  .msg.show{opacity:1;transform:none}
+  .op{background:var(--op);margin-left:auto;border-bottom-right-radius:4px}
+  .ag{background:var(--agent);border:1px solid var(--line);border-bottom-left-radius:4px}
+  .who{font-size:11px;color:var(--mut);margin:0 6px 3px}
+  .op .who{text-align:right}
+  .log{font-family:var(--mono);font-size:14px}
+  .ev{margin:9px 0;padding:9px 12px;border-left:3px solid var(--line);
+    background:#0c111b;border-radius:0 8px 8px 0;opacity:0;transform:translateY(8px);
+    transition:.35s;white-space:pre-wrap}
+  .ev.show{opacity:1;transform:none}
+  .ev .k{color:var(--mut);font-size:11px;letter-spacing:.05em}
+  .ev.approve{border-left-color:var(--warn)}
+  .ev.ok{border-left-color:var(--ok)}
+  .ev.deny{border-left-color:var(--deny)}
+  .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;margin-left:6px}
+  .pill.ok{background:rgba(31,157,85,.2);color:#6ee29e}
+  .pill.deny{background:rgba(224,75,75,.2);color:#ff9b9b}
+  .pill.warn{background:rgba(215,162,26,.2);color:#f2cf6b}
+</style>
+</head>
+<body>
+<header>
+  <h1>ChatOps — dari niat ke hasil</h1>
+  <span class="tag">OFFLINE BACKUP · profil classdemo</span>
+  <span class="spacer"></span>
+  <button id="play">▶ Putar demo</button>
+  <button id="reset" class="ghost">Ulang</button>
+</header>
+<main>
+  <section class="col chat"><h2>Percakapan (Telegram)</h2><div id="chat"></div></section>
+  <section class="col"><h2>Log agen (sandbox + approval)</h2><div id="log" class="log"></div></section>
+</main>
+
+<script>
+// Canned successful run — zero network. Two acts: a build, then the refusal.
+// Each step lands in the chat pane or the log pane so the class sees them side by side.
+const script = [
+  {p:"chat", c:'op', t:"Tolong bikinkan halaman web ucapan selamat datang buat kelasku hari ini."},
+  {p:"log",  k:"intake", cls:"", t:"pesan diterima · pengirim di allowlist ✓ · satu tugas aktif"},
+  {p:"chat", c:'ag', t:"Rencana: buat index.html berisi judul sambutan + tanggal di /workspace, lalu tampilkan. Setuju?"},
+  {p:"log",  k:"approval diminta", cls:"approve", t:"write index.html  →  menunggu persetujuan operator…", pill:["warn","perlu approve"]},
+  {p:"log",  k:"operator", cls:"ok", t:"✔ disetujui dari HP", pill:["ok","approved"]},
+  {p:"log",  k:"exec (sandbox · network:none)", cls:"ok", t:"$ touch /workspace/index.html\n$ (menulis isi halaman)", pill:["ok","dijalankan di container"]},
+  {p:"chat", c:'ag', t:"Selesai. File index.html sudah dibuat di workspace — bisa langsung dibuka di browser. 🎉"},
+  {p:"log",  k:"tugas selesai", cls:"ok", t:"durasi 7 dtk · tetap di dalam /workspace · tidak ada jaringan keluar"},
+
+  {p:"chat", c:'op', t:"Oke sekarang hapus semua file di folder home-ku biar bersih ya."},
+  {p:"log",  k:"analisa", cls:"deny", t:"permintaan menyentuh di luar workspace + merusak data host", pill:["deny","ditolak"]},
+  {p:"chat", c:'ag', t:"Maaf, ini tidak saya lakukan. Permintaan itu menghapus file di luar folder kerja saya — dan saya memang hanya boleh menyentuh satu folder kerja, tanpa akses ke isi komputer Anda. Kalau maksudnya membersihkan workspace demo ini saja, saya bisa bantu itu."},
+  {p:"log",  k:"enforcement", cls:"deny", t:"diblok 2 lapis: perintah di luar allowlist (deny-fallback) + filesystem container (home tak ter-mount)", pill:["deny","aman"]},
+];
+
+const chat=document.getElementById('chat'), log=document.getElementById('log');
+const playBtn=document.getElementById('play'), resetBtn=document.getElementById('reset');
+let timer=null, i=0;
+
+function render(step){
+  if(step.p==="chat"){
+    const w=document.createElement('div'); w.className='who'; w.textContent = step.c==='op'?'operator':'agen';
+    const m=document.createElement('div'); m.className='msg '+(step.c==='op'?'op':'ag'); m.textContent=step.t;
+    chat.appendChild(w); chat.appendChild(m);
+    requestAnimationFrame(()=>m.classList.add('show'));
+    m.scrollIntoView({behavior:'smooth',block:'end'});
+  } else {
+    const e=document.createElement('div'); e.className='ev '+(step.cls||'');
+    const k=document.createElement('div'); k.className='k'; k.textContent=step.k.toUpperCase();
+    e.appendChild(k);
+    const body=document.createElement('span'); body.textContent=step.t; e.appendChild(body);
+    if(step.pill){const pl=document.createElement('span');pl.className='pill '+step.pill[0];pl.textContent=step.pill[1];e.appendChild(pl);}
+    log.appendChild(e);
+    requestAnimationFrame(()=>e.classList.add('show'));
+    e.scrollIntoView({behavior:'smooth',block:'end'});
+  }
+}
+function step(){ if(i>=script.length){stop();return;} render(script[i++]); }
+function play(){ playBtn.disabled=true; timer=setInterval(step,1600); }
+function stop(){ clearInterval(timer); playBtn.disabled=false; }
+function reset(){ stop(); i=0; chat.innerHTML=''; log.innerHTML=''; }
+playBtn.onclick=play; resetBtn.onclick=reset;
+</script>
+</body>
+</html>
